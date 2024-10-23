@@ -41,6 +41,7 @@ end)
 
 function SetDeathState(deathState)
     playerState:set(DEATH_STATE_STATE_BAG, deathState, true)
+    DeathState = deathState
 end
 
 BleedTickTimer, AdvanceBleedTimer = 0, 0
@@ -55,23 +56,31 @@ RespawnHoldTime = 5
 LastStandDict = 'combat@damage@writhe'
 LastStandAnim = 'writhe_loop'
 
-exports('isDead', function()
+exports('IsDead', function()
     return DeathState == sharedConfig.deathState.DEAD
 end)
 
-exports('getLaststand', function()
+exports('IsLaststand', function()
     return DeathState == sharedConfig.deathState.LAST_STAND
 end)
 
-exports('getDeathTime', function()
+exports('GetDeathTime', function()
     return DeathTime
 end)
 
-exports('getLaststandTime', function()
+exports('GetLaststandTime', function()
     return LaststandTime
 end)
 
-exports('getRespawnHoldTimeDeprecated', function()
+exports('IncrementDeathTime', function(seconds)
+    DeathTime += seconds
+end)
+
+exports('IncrementLaststandTime', function(seconds)
+    LaststandTime += seconds
+end)
+
+exports('GetRespawnHoldTimeDeprecated', function()
     return RespawnHoldTime
 end)
 
@@ -98,14 +107,14 @@ local function doLimbAlert()
         local i = 0
         for bodyPartKey, injury in pairs(Injuries) do
             local bodyPart = sharedConfig.bodyParts[bodyPartKey]
-            limbDamageMsg = limbDamageMsg .. Lang:t('info.pain_message', { limb = bodyPart.label, severity = sharedConfig.woundLevels[injury.severity].label})
+            limbDamageMsg = limbDamageMsg .. locale('info.pain_message', bodyPart.label, sharedConfig.woundLevels[injury.severity].label)
             i += 1
             if i < NumInjuries then
                 limbDamageMsg = limbDamageMsg .. ' | '
             end
         end
     else
-        limbDamageMsg = Lang:t('info.many_places')
+        limbDamageMsg = locale('info.many_places')
     end
     exports.qbx_core:Notify(limbDamageMsg, 'error')
 end
@@ -119,7 +128,7 @@ function MakePedLimp()
 end
 
 --- TODO: this export should not check any conditions, but force the ped to limp instead.
-exports('makePedLimp', MakePedLimp)
+exports('MakePedLimp', MakePedLimp)
 
 local function resetMinorInjuries()
     for bodyPartKey, injury in pairs(Injuries) do
@@ -158,16 +167,16 @@ local function resetAllInjuries()
     SendBleedAlert()
     MakePedLimp()
     doLimbAlert()
-    lib.callback('qbx_medical:server:resetHungerAndThirst')
+    lib.callback.await('qbx_medical:server:resetHungerAndThirst')
 end
 
 ---notify the player of bleeding to their body.
 function SendBleedAlert()
     if DeathState == sharedConfig.deathState.DEAD or BleedLevel == 0 then return end
-    exports.qbx_core:Notify(Lang:t('info.bleed_alert', {bleedstate = sharedConfig.bleedingStates[BleedLevel]}), 'inform')
+    exports.qbx_core:Notify(locale('info.bleed_alert', sharedConfig.bleedingStates[BleedLevel]), 'inform')
 end
 
-exports('sendBleedAlert', SendBleedAlert)
+exports('SendBleedAlert', SendBleedAlert)
 
 ---adds a bleed to the player and alerts them. Total bleed level maxes at 4.
 ---@param level 1|2|3|4 speed of the bleed
@@ -184,13 +193,14 @@ end
 
 ---heals player wounds.
 ---@param type? 'full'|any heals all wounds if full otherwise heals only major wounds.
-lib.callback.register('qbx_medical:client:heal', function(type)
+RegisterNetEvent('qbx_medical:client:heal', function(type)
     if type == 'full' then
         resetAllInjuries()
     else
         resetMinorInjuries()
     end
-    exports.qbx_core:Notify(Lang:t('success.wounds_healed'), 'success')
+
+    exports.qbx_core:Notify(locale('success.wounds_healed'), 'success')
 end)
 
 CreateThread(function()
@@ -217,5 +227,6 @@ RegisterNetEvent('qbx_medical:client:playerRevived', function()
     resetAllInjuries()
     ResetPedMovementClipset(cache.ped, 0.0)
     TriggerServerEvent('hud:server:RelieveStress', 100)
-    exports.qbx_core:Notify(Lang:t('info.healthy'), 'inform')
+    exports.qbx_core:Notify(locale('info.healthy'), 'inform')
+    LocalPlayer.state.invBusy = false
 end)

@@ -5,7 +5,9 @@ local WEAPONS = exports.qbx_core:GetWeapons()
 ---blocks until ped is no longer moving
 function WaitForPlayerToStopMoving()
     local timeOut = 10000
-    while GetEntitySpeed(cache.ped) > 0.5 or IsPedRagdoll(cache.ped) and timeOut > 1 do timeOut -= 10 Wait(10) end
+    while GetEntitySpeed(cache.ped) > 0.1 and IsPedRagdoll(cache.ped) and timeOut > 1 do
+        timeOut -= 10 Wait(10)
+    end
 end
 
 --- low level GTA resurrection
@@ -29,17 +31,19 @@ end
 local function logPlayerKiller()
     local killer_2, killerWeapon = NetworkGetEntityKillerOfPlayer(cache.playerId)
     local killer = GetPedSourceOfDeath(cache.ped)
-    if killer_2 ~= 0 and killer_2 ~= -1 then killer = killer_2 end
-    local killerId = NetworkGetPlayerIndexFromPed(killer)
-    local killerName = killerId ~= -1 and GetPlayerName(killerId) .. ' ' .. '(' .. GetPlayerServerId(killerId) .. ')' or Lang:t('info.self_death')
-    local weaponLabel = Lang:t('info.wep_unknown')
-    local weaponName = Lang:t('info.wep_unknown')
-    local weaponItem = WEAPONS[killerWeapon]
-    if weaponItem then
-        weaponLabel = weaponItem.label
-        weaponName = weaponItem.name
+
+    if killer_2 ~= 0 and killer_2 ~= -1 then
+        killer = killer_2
     end
-    TriggerServerEvent('qb-log:server:CreateLog', 'death', Lang:t('logs.death_log_title', { playername = GetPlayerName(cache.playerId), playerid = GetPlayerServerId(cache.playerId) }), 'red', Lang:t('logs.death_log_message', { killername = killerName, playername = GetPlayerName(cache.playerId), weaponlabel = weaponLabel, weaponname = weaponName }))
+
+    local killerId = NetworkGetPlayerIndexFromPed(killer)
+    local killerName = killerId ~= -1 and (' %s (%d)'):format(GetPlayerName(killerId), GetPlayerServerId(killerId)) or locale('info.self_death')
+    local weaponItem = WEAPONS[killerWeapon]
+    local weaponLabel = locale('info.wep_unknown') or (weaponItem and weaponItem.label)
+    local weaponName = locale('info.wep_unknown') or (weaponItem and weaponItem.name)
+    local message = locale('logs.death_log_message', killerName, GetPlayerName(cache.playerId), weaponLabel, weaponName)
+
+    lib.callback.await('qbx_medical:server:log', false, 'playerKiller', message)
 end
 
 ---count down last stand, if last stand is over, put player in death mode and log the killer.
@@ -47,27 +51,25 @@ local function countdownLastStand()
     if LaststandTime - 1 > 0 then
         LaststandTime -= 1
     else
-        exports.qbx_core:Notify(Lang:t('error.bled_out'), 'error')
+        exports.qbx_core:Notify(locale('error.bled_out'), 'error')
         EndLastStand()
         logPlayerKiller()
-        DeathTime = 0
+        DeathTime = config.deathTime
         OnDeath()
-        AllowRespawn()
     end
 end
 
 ---put player in last stand mode and notify EMS.
-function StartLastStand()
-    Wait(1000)
+function StartLastStand(attacker, weapon)
+    TriggerEvent('ox_inventory:disarm', cache.playerId, true)
     WaitForPlayerToStopMoving()
     TriggerServerEvent('InteractSound_SV:PlayOnSource', 'demo', 0.1)
     LaststandTime = config.laststandReviveInterval
     ResurrectPlayer()
     SetEntityHealth(cache.ped, 150)
-    PlayUnescortedLastStandAnimation()
     SetDeathState(sharedConfig.deathState.LAST_STAND)
-    TriggerEvent('qbx_medical:client:onPlayerLaststand')
-    TriggerServerEvent('qbx_medical:server:onPlayerLaststand')
+    TriggerEvent('qbx_medical:client:onPlayerLaststand', attacker, weapon)
+    TriggerServerEvent('qbx_medical:server:onPlayerLaststand', attacker, weapon)
     CreateThread(function()
         while DeathState == sharedConfig.deathState.LAST_STAND do
             countdownLastStand()
@@ -78,7 +80,10 @@ function StartLastStand()
     CreateThread(function()
         while DeathState == sharedConfig.deathState.LAST_STAND do
             DisableControls()
+            PlayLastStandAnimation()
             Wait(0)
         end
     end)
 end
+
+exports('StartLastStand', StartLastStand)

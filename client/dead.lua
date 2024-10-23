@@ -1,6 +1,7 @@
+local config = require 'config.client'
 local sharedConfig = require 'config.shared'
 local WEAPONS = exports.qbx_core:GetWeapons()
-local allowRespawn = false
+local allowRespawn = true
 
 local function playDeadAnimation()
     local deadAnimDict = 'dead'
@@ -10,23 +11,20 @@ local function playDeadAnimation()
 
     if cache.vehicle then
         if not IsEntityPlayingAnim(cache.ped, deadVehAnimDict, deadVehAnim, 3) then
-            lib.requestAnimDict(deadVehAnimDict, 5000)
-            TaskPlayAnim(cache.ped, deadVehAnimDict, deadVehAnim, 1.0, 1.0, -1, 1, 0, false, false, false)
+            lib.playAnim(cache.ped, deadVehAnimDict, deadVehAnim, 1.0, 1.0, -1, 1, 0, false, false, false)
         end
     elseif not IsEntityPlayingAnim(cache.ped, deadAnimDict, deadAnim, 3) then
-        lib.requestAnimDict(deadAnimDict, 5000)
-        TaskPlayAnim(cache.ped, deadAnimDict, deadAnim, 1.0, 1.0, -1, 1, 0, false, false, false)
+        lib.playAnim(cache.ped, deadAnimDict, deadAnim, 1.0, 1.0, -1, 1, 0, false, false, false)
     end
 end
 
-exports('playDeadAnimation', playDeadAnimation)
+exports('PlayDeadAnimation', playDeadAnimation)
 
 ---put player in death animation and make invincible
-function OnDeath()
-    if DeathState == sharedConfig.deathState.DEAD then return end
+function OnDeath(attacker, weapon)
     SetDeathState(sharedConfig.deathState.DEAD)
-    TriggerEvent('qbx_medical:client:onPlayerDied')
-    TriggerServerEvent('qbx_medical:server:onPlayerDied')
+    TriggerEvent('qbx_medical:client:onPlayerDied', attacker, weapon)
+    TriggerServerEvent('qbx_medical:server:onPlayerDied', attacker, weapon)
     TriggerServerEvent('InteractSound_SV:PlayOnSource', 'demo', 0.1)
 
     WaitForPlayerToStopMoving()
@@ -38,51 +36,60 @@ function OnDeath()
             Wait(0)
         end
     end)
+    LocalPlayer.state.invBusy = true
 
     ResurrectPlayer()
     playDeadAnimation()
     SetEntityInvincible(cache.ped, true)
     SetEntityHealth(cache.ped, GetEntityMaxHealth(cache.ped))
+    CheckForRespawn()
 end
 
-exports('killPlayer', OnDeath)
+exports('KillPlayer', OnDeath)
 
 local function respawn()
     local success = lib.callback.await('qbx_medical:server:respawn')
     if not success then return end
-    if exports.qbx_policejob:IsHandcuffed() then
+    if QBX.PlayerData.metadata.ishandcuffed then
         TriggerEvent('police:client:GetCuffed', -1)
     end
     TriggerEvent('police:client:DeEscort')
+    LocalPlayer.state.invBusy = false
 end
 
 ---Allow player to respawn
-function AllowRespawn()
-    allowRespawn = true
+function CheckForRespawn()
     RespawnHoldTime = 5
     while DeathState == sharedConfig.deathState.DEAD do
-        Wait(1000)
-        DeathTime -= 1
-        if DeathTime <= 0 then
-            if IsControlPressed(0, 38) and RespawnHoldTime <= 1 and allowRespawn then
-                respawn()
-            end
-            if IsControlPressed(0, 38) then
-                RespawnHoldTime -= 1
-            end
-            if IsControlReleased(0, 38) then
-                RespawnHoldTime = 5
-            end
-            if RespawnHoldTime <= 1 then
-                RespawnHoldTime = 0
-            end
+        if IsControlPressed(0, 38) and RespawnHoldTime <= 1 and allowRespawn then
+            respawn()
+            return
         end
+        if IsControlPressed(0, 38) then
+            RespawnHoldTime -= 1
+        end
+        if IsControlReleased(0, 38) then
+            RespawnHoldTime = 5
+        end
+        if RespawnHoldTime <= 0 then
+            RespawnHoldTime = 0
+        end
+        DeathTime -= 1
+        if DeathTime <= 0 and allowRespawn then
+            respawn()
+            return
+        end
+        Wait(1000)
     end
 end
 
-exports('allowRespawn', AllowRespawn)
+function AllowRespawn()
+    allowRespawn = true
+end
 
-exports('disableRespawn', function()
+exports('AllowRespawn', AllowRespawn)
+
+exports('DisableRespawn', function()
     allowRespawn = false
 end)
 
@@ -92,13 +99,14 @@ end)
 ---@param weapon string weapon hash
 local function logDeath(victim, attacker, weapon)
     local playerId = NetworkGetPlayerIndexFromPed(victim)
-    local playerName = GetPlayerName(playerId) .. ' ' .. '(' .. GetPlayerServerId(playerId) .. ')' or Lang:t('info.self_death')
+    local playerName = (' %s (%d)'):format(GetPlayerName(playerId), GetPlayerServerId(playerId)) or locale('info.self_death')
     local killerId = NetworkGetPlayerIndexFromPed(attacker)
-    local killerName = GetPlayerName(killerId) .. ' ' .. '(' .. GetPlayerServerId(killerId) .. ')' or Lang:t('info.self_death')
-    local weaponLabel = WEAPONS[weapon].label or 'Unknown'
-    local weaponName = WEAPONS[weapon].name or 'Unknown'
-    local message = Lang:t('logs.death_log_message', { killername = killerName, playername = playerName, weaponlabel = weaponLabel, weaponname = weaponName })
-    lib.callback.await('qbx_medical:server:logDeath', false, message)
+    local killerName = ('%s (%d)'):format(GetPlayerName(killerId), GetPlayerServerId(killerId)) or locale('info.self_death')
+    local weaponLabel = WEAPONS[weapon]?.label or 'Unknown'
+    local weaponName = WEAPONS[weapon]?.name or 'Unknown'
+    local message = locale('logs.death_log_message', killerName, playerName, weaponLabel, weaponName)
+
+    lib.callback.await('qbx_medical:server:log', false, 'logDeath', message)
 end
 
 ---when player is killed by another player, set last stand mode, or if already in last stand mode, set player to dead mode.
@@ -109,13 +117,13 @@ AddEventHandler('gameEventTriggered', function(event, data)
     local victim, attacker, victimDied, weapon = data[1], data[2], data[4], data[7]
     if not IsEntityAPed(victim) or not victimDied or NetworkGetPlayerIndexFromPed(victim) ~= cache.playerId or not IsEntityDead(cache.ped) then return end
     if DeathState == sharedConfig.deathState.ALIVE then
-        StartLastStand()
+        Wait(1000)
+        StartLastStand(attacker, weapon)
     elseif DeathState == sharedConfig.deathState.LAST_STAND then
         EndLastStand()
         logDeath(victim, attacker, weapon)
-        DeathTime = 0
-        OnDeath()
-        AllowRespawn()
+        DeathTime = config.deathTime
+        OnDeath(attacker, weapon)
     end
 end)
 
